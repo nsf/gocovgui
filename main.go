@@ -3,7 +3,6 @@ package main
 import (
 	"github.com/axw/gocov"
 	"github.com/nsf/gothic"
-	"strconv"
 	"os/exec"
 	"bytes"
 	"io/ioutil"
@@ -99,8 +98,7 @@ var (
 )
 
 func gocov_test_error(ir *gothic.Interpreter, err error) {
-	ir.Eval(`tk_messageBox -title "gocov test error" -icon error -message `,
-		strconv.Quote(err.Error()))
+	ir.Eval(`tk_messageBox -title "gocov test error" -icon error -message %{%q}`, err)
 }
 
 func reached(f *gocov.Function) int {
@@ -147,12 +145,12 @@ func gocov_selection(ir *gothic.Interpreter) {
 			continue
 		}
 		ls, le := s.Start - f.Start, s.End - f.Start
-		ir.Eval(`.f1.sourceview tag add red {1.0 +`, ls, `chars} {1.0 +`, le, `chars}`)
+		ir.Eval(`.f1.sourceview tag add red {1.0 +%{}chars} {1.0 +%{}chars}`, ls, le)
 	}
 
 	if xsourceview != "" {
-		ir.Eval(".f1.sourceview xview moveto [lindex {", xsourceview, "} 0]")
-		ir.Eval(".f1.sourceview yview moveto [lindex {", ysourceview, "} 0]")
+		ir.Eval(".f1.sourceview xview moveto [lindex {%{}} 0]", xsourceview)
+		ir.Eval(".f1.sourceview yview moveto [lindex {%{}} 0]", ysourceview)
 		xsourceview = ""
 		ysourceview = ""
 	}
@@ -188,10 +186,8 @@ func gocov_test(ir *gothic.Interpreter) {
 			if prevsel != "" && prevsel == fun {
 				sel = id
 			}
-			ir.Eval(`.f2.funcs insert {} end -id `, id,
-				` -values {`, strconv.Quote(fun),
-				` `, strconv.Quote(file),
-				` `, strconv.Quote(cov), `}`)
+			ir.Eval(`.f2.funcs insert {} end -id %{} -values {%{%q} %{%q} %{%q}}`,
+				id, fun, file, cov)
 		}
 	}
 
@@ -212,7 +208,7 @@ func gocov_test(ir *gothic.Interpreter) {
 	if sel == "" {
 		sel = "f_0_0"
 	}
-	ir.Eval(".f2.funcs selection set ", sel)
+	ir.Eval(".f2.funcs selection set %{}", sel)
 }
 
 func gocov_update(ir *gothic.Interpreter) {
@@ -234,8 +230,7 @@ func main() {
 	})
 	ir.ErrorFilter(func(err error) error {
 		if err != nil {
-			ir.Eval("tk_messageBox -title Error -icon error -message ",
-				strconv.Quote(err.Error()))
+			ir.Eval("tk_messageBox -title Error -icon error -message %{%q}", err)
 		}
 		return err
 	})
