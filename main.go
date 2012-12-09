@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"io/ioutil"
 	"encoding/json"
+	"unicode/utf8"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -50,7 +51,7 @@ const init_code = `
 
 	# source view
 	text $p.sourceview
-	$p.sourceview tag configure red -background "#FF7878"
+	$p.sourceview tag configure red -background "#FFCCCC"
 	$p.sourceview configure -yscrollcommand "$p.sourceview_vscroll set"
 	$p.sourceview configure -xscrollcommand "$p.sourceview_hscroll set"
 	$p.sourceview configure -wrap none
@@ -93,7 +94,7 @@ const init_code = `
 	$p.funcs heading coverage -text "Coverage"
 	$p.funcs column  name     -minwidth 200 -width 400
 	$p.funcs column  file     -minwidth 100 -width 200 -stretch false
-	$p.funcs column  coverage -minwidth 110 -width 110 -stretch false
+	$p.funcs column  coverage -minwidth 120 -width 120 -stretch false
 
 	# functions scrollbar
 	ttk::scrollbar $p.funcs_vscroll -command "$p.funcs yview" -orient vertical
@@ -120,9 +121,42 @@ type function struct {
 	s_total int
 	s_reached int
 	s_percentage float64
+	statements []statement
+
+	// offset in bytes from the beginning of the file
 	start int
 	end int
-	statements []*gocov.Statement
+}
+
+// gocovgui collects only unreached statements
+type statement struct {
+	// Offset in bytes from the beginning of the function.
+	start int
+	end int
+
+	// Cached offset in characters from the beginning of the function.
+	// We can't calculate them on gocov update because it's pointless
+	// to read files before we actually need them.
+	startc int
+	endc int
+}
+
+func (s *statement) calculate_char_offset(data []byte) {
+	// let's do it slow O(N*M) way
+	b := 0
+	c := 0
+	for b < len(data) {
+		_, size := utf8.DecodeRune(data[b:])
+		if s.start == b {
+			s.startc = c
+		}
+		if s.end == b {
+			s.endc = c
+			break
+		}
+		c += 1
+		b += size
+	}
 }
 
 type funcs_sort_base []*function
@@ -184,18 +218,55 @@ func gocov_test_error(ir *gothic.Interpreter, err error) {
 	ir.Eval(`tk_messageBox -title "gocov test error" -icon error -message %{%q}`, err)
 }
 
-func reached(f *gocov.Function) int {
-	i := 0
-	for _, s := range f.Statements {
+func convert_statements(s []*gocov.Statement, offset int) []statement {
+	out := make([]statement, 0)
+	for _, s := range s {
 		if s.Reached != 0 {
-			i++
+			continue
 		}
+
+		out = append(out, statement{
+			start: s.Start - offset,
+			end: s.End - offset,
+			startc: -1,
+			endc: -1,
+		})
 	}
-	return i
+	return out
 }
 
 func percentage(n, len int) float64 {
 	return float64(n) / float64(len) * 100.0
+}
+
+// here we skip whitespace characters between \n and first non-space character
+// on the next line, it simply looks better
+func highlight_range_nicely(ir *gothic.Interpreter, c int, data []byte) {
+	const fmt = `.f1.sourceview tag add red {1.0 +%{}chars} {1.0 +%{}chars}`
+	skipping := false
+	b := 0
+	beg := c
+	for b < len(data) {
+		r, size := utf8.DecodeRune(data[b:])
+		if !skipping {
+			if r == '\n' {
+				ir.Eval(fmt, beg, c)
+				skipping = true
+			}
+		} else {
+			switch r {
+			case ' ', '\t', '\r', '\n':
+			default:
+				beg = c
+				skipping = false
+			}
+		}
+		c += 1
+		b += size
+	}
+	if !skipping {
+		ir.Eval(fmt, beg, c)
+	}
 }
 
 func gocov_selection(ir *gothic.Interpreter) {
@@ -216,7 +287,8 @@ func gocov_selection(ir *gothic.Interpreter) {
 		panic(err)
 	}
 
-	ir.Set("source", string(data[f.start:f.end]))
+	funcdata := data[f.start:f.end]
+	ir.Set("source", string(funcdata))
 	ir.Eval(`
 		.f1.sourceview configure -state normal
 		.f1.sourceview delete 1.0 end
@@ -224,11 +296,10 @@ func gocov_selection(ir *gothic.Interpreter) {
 		.f1.sourceview configure -state disabled
 	`)
 	for _, s := range f.statements {
-		if s.Reached != 0 {
-			continue
+		if s.startc == -1 {
+			s.calculate_char_offset(funcdata)
 		}
-		ls, le := s.Start - f.start, s.End - f.start
-		ir.Eval(`.f1.sourceview tag add red {1.0 +%{}chars} {1.0 +%{}chars}`, ls, le)
+		highlight_range_nicely(ir, s.startc, funcdata[s.start:s.end])
 	}
 
 	if xsourceview != "" {
@@ -262,7 +333,8 @@ func gocov_test(ir *gothic.Interpreter) {
 	funcs = funcs[:0]
 	for _, pkg := range result.Packages {
 		for _, fun := range pkg.Functions {
-			r := reached(fun)
+			statements := convert_statements(fun.Statements, fun.Start)
+			r := len(fun.Statements) - len(statements)
 			t := len(fun.Statements)
 			p := percentage(r, t)
 			name := fmt.Sprintf("%s.%s", pkg.Name, fun.Name)
@@ -280,7 +352,7 @@ func gocov_test(ir *gothic.Interpreter) {
 				s_percentage: p,
 				start: fun.Start,
 				end: fun.End,
-				statements: fun.Statements,
+				statements: statements,
 			})
 
 			if prevsel != "" && prevsel == name {
