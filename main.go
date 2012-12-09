@@ -9,10 +9,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 )
-
-const red = `#FF7878`
-const yellow = `#FFDF52`
 
 const init_code = `
 	wm title . "GoCov GUI"
@@ -23,6 +21,29 @@ const init_code = `
 	ttk::frame .f2
 	.p add .f1 -weight 1
 	.p add .f2 -weight 0
+
+	# ---------------------------- arrow images ----------------------------
+	image create bitmap img::arrowdown -data {
+		#define bm_width 8
+		#define bm_height 8
+		static char bm_bits = {
+			0x00, 0x00, 0x7f, 0x3e, 0x1c, 0x08, 0x00, 0x00
+		}
+	}
+	image create bitmap img::arrowup -data {
+		#define bm_width 8
+		#define bm_height 8
+		static char bm_bits = {
+			0x00, 0x00, 0x08, 0x1c, 0x3e, 0x7f, 0x00, 0x00
+		}
+	}
+	image create bitmap img::arrowblank -data {
+		#define bm_width 8
+		#define bm_height 8
+		static char bm_bits = {
+			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+		}
+	}
 
 	# ---------------------------- upper half ------------------------------
 	set p .f1
@@ -41,7 +62,7 @@ const init_code = `
 
 	# refresh button
 	ttk::frame $p.bar
-	ttk::button $p.bar.gocov -text "gocov test" -command gocovtest
+	ttk::button $p.bar.gocov -text "gocov test" -command gocov_update
 	ttk::label $p.bar.path -relief sunken -padding {3 0} -textvariable pathtext
 	ttk::label $p.bar.cov -relief sunken -padding {3 0} -textvariable covtext
 
@@ -64,15 +85,15 @@ const init_code = `
 
 	# functions list
 	ttk::treeview $p.funcs -yscrollcommand "$p.funcs_vscroll set"
-	$p.funcs configure -columns {function file coverage}
+	$p.funcs configure -columns {name file coverage}
 	$p.funcs configure -selectmode browse
 	$p.funcs configure -show headings
-	$p.funcs heading function -text "Function"
-	$p.funcs heading file -text "File"
+	$p.funcs heading name     -text "Function"
+	$p.funcs heading file     -text "File"
 	$p.funcs heading coverage -text "Coverage"
-	$p.funcs column function -minwidth 200 -width 400
-	$p.funcs column file -minwidth 100 -width 200 -stretch false
-	$p.funcs column coverage -minwidth 110 -width 110 -stretch false
+	$p.funcs column  name     -minwidth 200 -width 400
+	$p.funcs column  file     -minwidth 100 -width 200 -stretch false
+	$p.funcs column  coverage -minwidth 110 -width 110 -stretch false
 
 	# functions scrollbar
 	ttk::scrollbar $p.funcs_vscroll -command "$p.funcs yview" -orient vertical
@@ -87,11 +108,73 @@ const init_code = `
 	pack .p -expand true -fill both
 
 	# ---------------------------- bindings --------------------------------
-	bind .f2.funcs <<TreeviewSelect>> gocovsel
+	bind .f2.funcs <<TreeviewSelect>> gocov_selection
 `
 
+type function struct {
+	id string
+	name string
+	coverage string
+	file string
+	path string
+	s_total int
+	s_reached int
+	s_percentage float64
+	start int
+	end int
+	statements []*gocov.Statement
+}
+
+type funcs_sort_base []*function
+func (f funcs_sort_base) Len() int { return len(f) }
+func (f funcs_sort_base) Swap(i, j int) { f[i], f[j] = f[j], f[i] }
+
+type funcs_sort_name_asc struct { funcs_sort_base }
+type funcs_sort_name_desc struct { funcs_sort_base }
+type funcs_sort_file_asc struct { funcs_sort_base }
+type funcs_sort_file_desc struct { funcs_sort_base }
+type funcs_sort_coverage_asc struct { funcs_sort_base }
+type funcs_sort_coverage_desc struct { funcs_sort_base }
+
+func (f funcs_sort_name_asc) Less(i, j int) bool {
+	s := f.funcs_sort_base
+	return s[i].name < s[j].name
+}
+func (f funcs_sort_name_desc) Less(i, j int) bool {
+	s := f.funcs_sort_base
+	return s[i].name >= s[j].name
+}
+func (f funcs_sort_file_asc) Less(i, j int) bool {
+	s := f.funcs_sort_base
+	if s[i].file == s[j].file {
+		return s[i].name < s[j].name
+	}
+	return s[i].file < s[j].file
+}
+func (f funcs_sort_file_desc) Less(i, j int) bool {
+	s := f.funcs_sort_base
+	if s[i].file == s[j].file {
+		return s[i].name < s[j].name
+	}
+	return s[i].file > s[j].file
+}
+func (f funcs_sort_coverage_desc) Less(i, j int) bool {
+	s := f.funcs_sort_base
+	if s[i].s_percentage == s[j].s_percentage {
+		return s[i].name < s[j].name
+	}
+	return s[i].s_percentage > s[j].s_percentage
+}
+func (f funcs_sort_coverage_asc) Less(i, j int) bool {
+	s := f.funcs_sort_base
+	if s[i].s_percentage == s[j].s_percentage {
+		return s[i].name < s[j].name
+	}
+	return s[i].s_percentage < s[j].s_percentage
+}
+
 var (
-	current []*gocov.Package
+	funcs []*function
 	prevsel string
 	xsourceview string
 	ysourceview string
@@ -119,32 +202,32 @@ func gocov_selection(ir *gothic.Interpreter) {
 	var selection string
 	ir.EvalAs(&selection, ".f2.funcs selection")
 
-	var pi, fi int
-	_, err := fmt.Sscanf(selection, "f_%d_%d", &pi, &fi)
+	var fi int
+	_, err := fmt.Sscanf(selection, "fi_%d", &fi)
 	if err != nil {
 		panic(err)
 	}
 
-	f := current[pi].Functions[fi]
-	prevsel = fmt.Sprintf("%s.%s", current[pi].Name, f.Name)
+	f := funcs[fi]
+	prevsel = f.name
 
-	data, err := ioutil.ReadFile(f.File)
+	data, err := ioutil.ReadFile(f.path)
 	if err != nil {
 		panic(err)
 	}
 
-	ir.Set("source", string(data[f.Start:f.End]))
+	ir.Set("source", string(data[f.start:f.end]))
 	ir.Eval(`
 		.f1.sourceview configure -state normal
 		.f1.sourceview delete 1.0 end
 		.f1.sourceview insert end $source
 		.f1.sourceview configure -state disabled
 	`)
-	for _, s := range f.Statements {
+	for _, s := range f.statements {
 		if s.Reached != 0 {
 			continue
 		}
-		ls, le := s.Start - f.Start, s.End - f.Start
+		ls, le := s.Start - f.start, s.End - f.start
 		ir.Eval(`.f1.sourceview tag add red {1.0 +%{}chars} {1.0 +%{}chars}`, ls, le)
 	}
 
@@ -174,41 +257,115 @@ func gocov_test(ir *gothic.Interpreter) {
 	}
 
 	sel := ""
-	current = result.Packages
-	for pi, p := range result.Packages {
-		for fi, f := range p.Functions {
-			r := reached(f)
-			n := len(f.Statements)
-			fun := fmt.Sprintf("%s.%s", p.Name, f.Name)
-			cov := fmt.Sprintf("%.2f%% (%d/%d)", percentage(r, n), r, n)
-			file := fmt.Sprintf("%s/%s", p.Name, filepath.Base(f.File))
-			id := fmt.Sprintf("f_%d_%d", pi, fi)
-			if prevsel != "" && prevsel == fun {
+
+	// build functions
+	funcs = funcs[:0]
+	for _, pkg := range result.Packages {
+		for _, fun := range pkg.Functions {
+			r := reached(fun)
+			t := len(fun.Statements)
+			p := percentage(r, t)
+			name := fmt.Sprintf("%s.%s", pkg.Name, fun.Name)
+			coverage := fmt.Sprintf("%.2f%% (%d/%d)", p, r, t)
+			file := fmt.Sprintf("%s/%s", pkg.Name, filepath.Base(fun.File))
+			id := fmt.Sprintf("fi_%d", len(funcs))
+			funcs = append(funcs, &function{
+				id: id,
+				name: name,
+				coverage: coverage,
+				file: file,
+				path: fun.File,
+				s_total: t,
+				s_reached: r,
+				s_percentage: p,
+				start: fun.Start,
+				end: fun.End,
+				statements: fun.Statements,
+			})
+
+			if prevsel != "" && prevsel == name {
 				sel = id
 			}
-			ir.Eval(`.f2.funcs insert {} end -id %{} -values {%{%q} %{%q} %{%q}}`,
-				id, fun, file, cov)
 		}
 	}
 
-	dir := filepath.Dir(current[0].Functions[0].File)
+	for _, f := range funcs {
+		ir.Eval(`.f2.funcs insert {} end -id %{} -values {%{%q} %{%q} %{%q}}`,
+			f.id, f.name, f.file, f.coverage)
+	}
+	gocov_sort(ir, "coverage", "desc")
+
+	dir := filepath.Dir(funcs[0].path)
 	ir.Set("pathtext", dir)
 
 	done := 0
 	total := 0
-	for _, p := range result.Packages {
-		for _, f := range p.Functions {
-			done += reached(f)
-			total += len(f.Statements)
-		}
+	for _, f := range funcs {
+		done += f.s_reached
+		total += f.s_total
 	}
 	ir.Set("covtext", fmt.Sprintf("Overall coverage: %.2f%% (%d/%d)",
 		percentage(done, total), done, total))
 
 	if sel == "" {
-		sel = "f_0_0"
+		sel = "fi_0"
 	}
 	ir.Eval(".f2.funcs selection set %{}", sel)
+}
+
+func gocov_sort(ir *gothic.Interpreter, by, order string) {
+	var image string
+	var si sort.Interface
+	var opposite string
+
+	sorted := make([]*function, len(funcs))
+	copy(sorted, funcs)
+	ir.Eval(`
+		# clean up images
+		.f2.funcs heading name     -image img::arrowblank
+		.f2.funcs heading file     -image img::arrowblank
+		.f2.funcs heading coverage -image img::arrowblank
+		.f2.funcs heading name     -command {gocov_sort name asc}
+		.f2.funcs heading file     -command {gocov_sort file asc}
+		.f2.funcs heading coverage -command {gocov_sort coverage asc}
+	`)
+	si = funcs_sort_coverage_desc{sorted}
+	if order == "desc" {
+		opposite = "asc"
+		image = "img::arrowdown"
+	} else {
+		image = "img::arrowup"
+		opposite = "desc"
+	}
+
+	switch by {
+	case "name":
+		if order == "desc" {
+			si = funcs_sort_name_desc{sorted}
+		} else {
+			si = funcs_sort_name_asc{sorted}
+		}
+	case "file":
+		if order == "desc" {
+			si = funcs_sort_file_desc{sorted}
+		} else {
+			si = funcs_sort_file_asc{sorted}
+		}
+	case "coverage":
+		if order == "desc" {
+			si = funcs_sort_coverage_desc{sorted}
+		} else {
+			si = funcs_sort_coverage_asc{sorted}
+		}
+	}
+	sort.Sort(si)
+	for i, f := range sorted {
+		ir.Eval(`.f2.funcs move %{} {} %{}`, f.id, i)
+	}
+	ir.Eval(`
+		.f2.funcs heading %{0} -command {gocov_sort %{0} %{1}}
+		.f2.funcs heading %{0} -image %{2}
+	`, by, opposite, image)
 }
 
 func gocov_update(ir *gothic.Interpreter) {
@@ -222,11 +379,14 @@ func gocov_update(ir *gothic.Interpreter) {
 
 func main() {
 	ir := gothic.NewInterpreter(init_code)
-	ir.RegisterCommand("gocovsel", func() {
+	ir.RegisterCommand("gocov_selection", func() {
 		gocov_selection(ir)
 	})
-	ir.RegisterCommand("gocovtest", func() {
+	ir.RegisterCommand("gocov_update", func() {
 		gocov_update(ir)
+	})
+	ir.RegisterCommand("gocov_sort", func(by, order string) {
+		gocov_sort(ir, by, order)
 	})
 	ir.ErrorFilter(func(err error) error {
 		if err != nil {
