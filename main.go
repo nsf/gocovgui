@@ -214,7 +214,7 @@ var (
 	ysourceview string
 )
 
-func gocov_test_error(ir *gothic.Interpreter, err error) {
+func gocov_test_error(ir *gothic.Interpreter, err string) {
 	ir.Eval(`tk_messageBox -title "gocov test error" -icon error -message %{%q}`, err)
 }
 
@@ -311,19 +311,26 @@ func gocov_selection(ir *gothic.Interpreter) {
 }
 
 func gocov_test(ir *gothic.Interpreter) {
-	var buf bytes.Buffer
+	var outbuf bytes.Buffer
+	var errbuf bytes.Buffer
+
 	cmd := exec.Command("gocov", "test")
-	cmd.Stdout = &buf
+	cmd.Stdout = &outbuf
+	cmd.Stderr = &errbuf
 	err := cmd.Run()
 	if err != nil {
-		gocov_test_error(ir, err)
+		if errbuf.Len() > 0 {
+			gocov_test_error(ir, errbuf.String())
+		} else {
+			gocov_test_error(ir, err.Error())
+		}
 		return
 	}
 
 	result := struct{ Packages []*gocov.Package }{}
-	err = json.Unmarshal(buf.Bytes(), &result)
+	err = json.Unmarshal(outbuf.Bytes(), &result)
 	if err != nil {
-		gocov_test_error(ir, err)
+		gocov_test_error(ir, err.Error())
 		return
 	}
 
