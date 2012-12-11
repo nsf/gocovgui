@@ -18,6 +18,7 @@ func (g *go_part) animation_ticker() {
 			return
 		default:
 		}
+		// TODO: probably a race condition here, need to think about it
 		g.Eval(`
 			set image [%{0} cget -image]
 			set idx -1
