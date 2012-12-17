@@ -48,9 +48,9 @@ type statement struct {
 	start int
 	end int
 
-	// Cached offset in characters from the beginning of the function.
-	// We can't calculate them on gocov update because it's pointless
-	// to read files before we actually need them.
+	// Cached offset in characters from the beginning of the function. We
+	// can't calculate them on gocov update because it's pointless to read
+	// files before we actually need them.
 	startc int
 	endc int
 }
@@ -248,9 +248,9 @@ func (g *go_part) TCL_update() {
 
 	var cmd *exec.Cmd
 	if len(os.Args) == 2 {
-		cmd = exec.Command("gocov", "test", os.Args[1])
+		cmd = exec.Command(g.gocov_path, "test", os.Args[1])
 	} else {
-		cmd = exec.Command("gocov", "test")
+		cmd = exec.Command(g.gocov_path, "test")
 	}
 	cmd.Stdout = &outbuf
 	cmd.Stderr = &errbuf
