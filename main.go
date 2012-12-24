@@ -24,6 +24,8 @@ type go_part struct {
 	gocov_path string
 	animation_stop chan bool
 	animation_widget string
+	sort_by string
+	sort_order string
 }
 
 type function struct {
@@ -309,7 +311,7 @@ func (g *go_part) TCL_update() {
 		g.Eval(`.f2.funcs insert {} end -id %{} -values {%{%q} %{%q} %{%q}}`,
 			f.id, f.name, f.file, f.coverage)
 	}
-	g.TCL_sort("coverage", "desc")
+	g.TCL_sort(g.sort_by, g.sort_order)
 
 	dir := filepath.Dir(g.funcs[0].path)
 	g.Set("pathtext", dir)
@@ -333,6 +335,9 @@ func (g *go_part) TCL_sort(by, order string) {
 	var image string
 	var si sort.Interface
 	var opposite string
+
+	g.sort_by = by
+	g.sort_order = order
 
 	sorted := make([]*function, len(g.funcs))
 	copy(sorted, g.funcs)
@@ -584,7 +589,10 @@ func (g *go_part) find_gocov() {
 }
 
 func main() {
-	var g go_part
+	g := go_part{
+		sort_by: "coverage",
+		sort_order: "desc",
+	}
 	g.find_gocov()
 	g.Interpreter = gothic.NewInterpreter("wm withdraw .")
 	g.RegisterCommands("go", &g)
