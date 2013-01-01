@@ -283,13 +283,12 @@ func (g *go_part) TCL_update() {
 			r := len(fun.Statements) - len(statements)
 			t := len(fun.Statements)
 			p := percentage(r, t)
-			name := fmt.Sprintf("%s.%s", pkg.Name, fun.Name)
 			coverage := fmt.Sprintf("%.2f%% (%d/%d)", p, r, t)
-			file := fmt.Sprintf("%s/%s", pkg.Name, filepath.Base(fun.File))
+			file := fmt.Sprintf("%s.%s", pkg.Name, filepath.Base(fun.File))
 			id := fmt.Sprintf("fi_%d", len(g.funcs))
 			g.funcs = append(g.funcs, &function{
 				id: id,
-				name: name,
+				name: fun.Name,
 				coverage: coverage,
 				file: file,
 				path: fun.File,
@@ -301,7 +300,7 @@ func (g *go_part) TCL_update() {
 				statements: statements,
 			})
 
-			if g.prevsel != "" && g.prevsel == name {
+			if g.prevsel != "" && g.prevsel == fun.Name {
 				sel = id
 			}
 		}
@@ -528,8 +527,8 @@ const main_code = `
 	$p.funcs heading name     -text "Function"
 	$p.funcs heading file     -text "File"
 	$p.funcs heading coverage -text "Coverage"
-	$p.funcs column  name     -minwidth 200 -width 400
-	$p.funcs column  file     -minwidth 100 -width 200 -stretch false
+	$p.funcs column  name     -minwidth 100 -width 300
+	$p.funcs column  file     -minwidth 100 -width 300 -stretch false
 	$p.funcs column  coverage -minwidth 120 -width 120 -stretch false
 
 	# functions scrollbar
