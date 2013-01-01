@@ -284,7 +284,7 @@ func (g *go_part) TCL_update() {
 			t := len(fun.Statements)
 			p := percentage(r, t)
 			coverage := fmt.Sprintf("%.2f%% (%d/%d)", p, r, t)
-			file := fmt.Sprintf("%s.%s", pkg.Name, filepath.Base(fun.File))
+			file := fmt.Sprintf("%s/%s", pkg.Name, filepath.Base(fun.File))
 			id := fmt.Sprintf("fi_%d", len(g.funcs))
 			g.funcs = append(g.funcs, &function{
 				id: id,
