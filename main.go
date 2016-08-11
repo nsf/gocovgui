@@ -1,63 +1,65 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"sort"
+	"unicode"
+	"unicode/utf8"
+
 	"github.com/axw/gocov"
 	"github.com/nsf/gothic"
-	"os/exec"
-	"bytes"
-	"io/ioutil"
-	"encoding/json"
-	"unicode/utf8"
-	"fmt"
-	"runtime"
-	"path/filepath"
-	"sort"
-	"os"
 )
 
-type go_part struct {
+type goPart struct {
 	*gothic.Interpreter
-	funcs []*function
-	prevsel string
-	xsourceview string
-	ysourceview string
-	gocov_path string
-	animation_stop chan bool
-	animation_widget string
-	sort_by string
-	sort_order string
+	funcs           []*function
+	prevsel         string
+	xsourceview     string
+	ysourceview     string
+	gocovPath       string
+	animationStop   chan bool
+	animationWidget string
+	sortBy          string
+	sortOrder       string
 }
 
 type function struct {
-	id string
-	name string
-	coverage string
-	file string
-	path string
-	s_total int
-	s_reached int
-	s_percentage float64
-	statements []statement
+	id          string
+	name        string
+	coverage    string
+	file        string
+	path        string
+	sTotal      int
+	sReached    int
+	sPercentage float64
+	statements  []statement
 
 	// offset in bytes from the beginning of the file
 	start int
-	end int
+	end   int
 }
 
 // gocovgui collects only unreached statements
 type statement struct {
 	// Offset in bytes from the beginning of the function.
 	start int
-	end int
+	end   int
 
 	// Cached offset in characters from the beginning of the function. We
 	// can't calculate them on gocov update because it's pointless to read
 	// files before we actually need them.
 	startc int
-	endc int
+	endc   int
 }
 
-func (s *statement) calculate_char_offset(data []byte) {
+func (s *statement) calculateCharOffset(data []byte) {
 	// let's do it slow O(N*M) way
 	b := 0
 	c := 0
@@ -70,29 +72,30 @@ func (s *statement) calculate_char_offset(data []byte) {
 			s.endc = c
 			break
 		}
-		c += 1
+
 		b += size
+		c++
 	}
 }
 
-func convert_statements(s []*gocov.Statement, offset int) []statement {
-	out := make([]statement, 0)
+func convertStatements(s []*gocov.Statement, offset int) []statement {
+	var out []statement
 	for _, s := range s {
 		if s.Reached != 0 {
 			continue
 		}
 
 		out = append(out, statement{
-			start: s.Start - offset,
-			end: s.End - offset,
+			start:  s.Start - offset,
+			end:    s.End - offset,
 			startc: -1,
-			endc: -1,
+			endc:   -1,
 		})
 	}
 	return out
 }
 
-func file_exists(path string) bool {
+func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
@@ -101,7 +104,7 @@ func percentage(n, len int) float64 {
 	return float64(n) / float64(len) * 100.0
 }
 
-func (g *go_part) detailed_error(plot string, details *bytes.Buffer) {
+func (g *goPart) detailedError(plot string, details fmt.Stringer) {
 	g.Set("detailtext", details.String())
 	g.Eval(`
 		set w .errdet
@@ -148,7 +151,7 @@ func (g *go_part) detailed_error(plot string, details *bytes.Buffer) {
 	`, plot)
 }
 
-func (g *go_part) error(err interface{}) {
+func (g *goPart) error(err interface{}) {
 	g.Eval(`
 		tk_messageBox -title "GoCovGUI Error" \
 			-message "GoCovGUI Error" -icon error \
@@ -156,7 +159,7 @@ func (g *go_part) error(err interface{}) {
 	`, err)
 }
 
-func (g *go_part) fatal_error(err interface{}) {
+func (g *goPart) fatalError(err interface{}) {
 	g.Eval(`
 		tk_messageBox -title "GoCovGUI Fatal Error" \
 			-message "GoCovGUI Fatal Error" -icon error \
@@ -167,7 +170,7 @@ func (g *go_part) fatal_error(err interface{}) {
 
 // here we skip whitespace characters between \n and first non-space character
 // on the next line, it simply looks better
-func (g *go_part) highlight_range_nicely(c int, data []byte) {
+func (g *goPart) highlightRangeNicely(c int, data []byte) {
 	const fmt = `.f1.sourceview tag add red {1.0 +%{}chars} {1.0 +%{}chars}`
 	skipping := false
 	b := 0
@@ -180,22 +183,21 @@ func (g *go_part) highlight_range_nicely(c int, data []byte) {
 				skipping = true
 			}
 		} else {
-			switch r {
-			case ' ', '\t', '\r', '\n':
-			default:
+			if !unicode.IsSpace(r) {
 				beg = c
 				skipping = false
 			}
 		}
-		c += 1
+
 		b += size
+		c++
 	}
 	if !skipping {
 		g.Eval(fmt, beg, c)
 	}
 }
 
-func (g *go_part) TCL_selection_callback(ir *gothic.Interpreter) {
+func (g *goPart) TCL_selection_callback(ir *gothic.Interpreter) {
 	var selection string
 	g.EvalAs(&selection, ".f2.funcs selection")
 
@@ -223,9 +225,9 @@ func (g *go_part) TCL_selection_callback(ir *gothic.Interpreter) {
 	`)
 	for _, s := range f.statements {
 		if s.startc == -1 {
-			s.calculate_char_offset(funcdata)
+			s.calculateCharOffset(funcdata)
 		}
-		g.highlight_range_nicely(s.startc, funcdata[s.start:s.end])
+		g.highlightRangeNicely(s.startc, funcdata[s.start:s.end])
 	}
 
 	if g.xsourceview != "" {
@@ -236,7 +238,7 @@ func (g *go_part) TCL_selection_callback(ir *gothic.Interpreter) {
 	}
 }
 
-func (g *go_part) TCL_update() {
+func (g *goPart) TCL_update() {
 	g.Eval(`
 		.f2.funcs delete [.f2.funcs children {}]
 		set covtext "Overall coverage: 0% (0/0)"
@@ -250,16 +252,16 @@ func (g *go_part) TCL_update() {
 
 	var cmd *exec.Cmd
 	if len(os.Args) == 2 {
-		cmd = exec.Command(g.gocov_path, "test", os.Args[1])
+		cmd = exec.Command(g.gocovPath, "test", os.Args[1])
 	} else {
-		cmd = exec.Command(g.gocov_path, "test")
+		cmd = exec.Command(g.gocovPath, "test")
 	}
 	cmd.Stdout = &outbuf
 	cmd.Stderr = &errbuf
 	err := cmd.Run()
 	if err != nil {
 		if errbuf.Len() > 0 {
-			g.detailed_error("gocov test failure", &errbuf)
+			g.detailedError("gocov test failure", &errbuf)
 		} else {
 			g.error(err)
 		}
@@ -279,7 +281,7 @@ func (g *go_part) TCL_update() {
 	g.funcs = g.funcs[:0]
 	for _, pkg := range result.Packages {
 		for _, fun := range pkg.Functions {
-			statements := convert_statements(fun.Statements, fun.Start)
+			statements := convertStatements(fun.Statements, fun.Start)
 			r := len(fun.Statements) - len(statements)
 			t := len(fun.Statements)
 			p := percentage(r, t)
@@ -287,17 +289,17 @@ func (g *go_part) TCL_update() {
 			file := fmt.Sprintf("%s/%s", pkg.Name, filepath.Base(fun.File))
 			id := fmt.Sprintf("fi_%d", len(g.funcs))
 			g.funcs = append(g.funcs, &function{
-				id: id,
-				name: fun.Name,
-				coverage: coverage,
-				file: file,
-				path: fun.File,
-				s_total: t,
-				s_reached: r,
-				s_percentage: p,
-				start: fun.Start,
-				end: fun.End,
-				statements: statements,
+				id:          id,
+				name:        fun.Name,
+				coverage:    coverage,
+				file:        file,
+				path:        fun.File,
+				sTotal:      t,
+				sReached:    r,
+				sPercentage: p,
+				start:       fun.Start,
+				end:         fun.End,
+				statements:  statements,
 			})
 
 			if g.prevsel != "" && g.prevsel == fun.Name {
@@ -310,7 +312,7 @@ func (g *go_part) TCL_update() {
 		g.Eval(`.f2.funcs insert {} end -id %{} -values {%{%q} %{%q} %{%q}}`,
 			f.id, f.name, f.file, f.coverage)
 	}
-	g.TCL_sort(g.sort_by, g.sort_order)
+	g.TCL_sort(g.sortBy, g.sortOrder)
 
 	dir := filepath.Dir(g.funcs[0].path)
 	g.Set("pathtext", dir)
@@ -318,8 +320,8 @@ func (g *go_part) TCL_update() {
 	done := 0
 	total := 0
 	for _, f := range g.funcs {
-		done += f.s_reached
-		total += f.s_total
+		done += f.sReached
+		total += f.sTotal
 	}
 	g.Set("covtext", fmt.Sprintf("Overall coverage: %.2f%% (%d/%d)",
 		percentage(done, total), done, total))
@@ -330,13 +332,13 @@ func (g *go_part) TCL_update() {
 	g.Eval(".f2.funcs selection set %{}", sel)
 }
 
-func (g *go_part) TCL_sort(by, order string) {
+func (g *goPart) TCL_sort(by, order string) {
 	var image string
 	var si sort.Interface
 	var opposite string
 
-	g.sort_by = by
-	g.sort_order = order
+	g.sortBy = by
+	g.sortOrder = order
 
 	sorted := make([]*function, len(g.funcs))
 	copy(sorted, g.funcs)
@@ -349,7 +351,7 @@ func (g *go_part) TCL_sort(by, order string) {
 		.f2.funcs heading file     -command {go::sort file asc}
 		.f2.funcs heading coverage -command {go::sort coverage asc}
 	`)
-	si = funcs_sort_coverage_desc{sorted}
+	si = funcsSortCoverageDesc{sorted}
 	if order == "desc" {
 		opposite = "asc"
 		image = "img::arrowdown"
@@ -361,21 +363,21 @@ func (g *go_part) TCL_sort(by, order string) {
 	switch by {
 	case "name":
 		if order == "desc" {
-			si = funcs_sort_name_desc{sorted}
+			si = funcsSortNameDesc{sorted}
 		} else {
-			si = funcs_sort_name_asc{sorted}
+			si = funcsSortNameAsc{sorted}
 		}
 	case "file":
 		if order == "desc" {
-			si = funcs_sort_file_desc{sorted}
+			si = funcsSortFileDesc{sorted}
 		} else {
-			si = funcs_sort_file_asc{sorted}
+			si = funcsSortFileAsc{sorted}
 		}
 	case "coverage":
 		if order == "desc" {
-			si = funcs_sort_coverage_desc{sorted}
+			si = funcsSortCoverageDesc{sorted}
 		} else {
-			si = funcs_sort_coverage_asc{sorted}
+			si = funcsSortCoverageAsc{sorted}
 		}
 	}
 	sort.Sort(si)
@@ -388,65 +390,66 @@ func (g *go_part) TCL_sort(by, order string) {
 	`, by, opposite, image)
 }
 
-func (g *go_part) main() {
-	g.Eval(main_code)
+func (g *goPart) main() {
+	g.Eval(mainCode)
 	g.TCL_update()
 }
 
-type funcs_sort_base []*function
-func (f funcs_sort_base) Len() int { return len(f) }
-func (f funcs_sort_base) Swap(i, j int) { f[i], f[j] = f[j], f[i] }
+type funcsSortBase []*function
 
-type funcs_sort_name_asc struct { funcs_sort_base }
-type funcs_sort_name_desc struct { funcs_sort_base }
-type funcs_sort_file_asc struct { funcs_sort_base }
-type funcs_sort_file_desc struct { funcs_sort_base }
-type funcs_sort_coverage_asc struct { funcs_sort_base }
-type funcs_sort_coverage_desc struct { funcs_sort_base }
+func (f funcsSortBase) Len() int      { return len(f) }
+func (f funcsSortBase) Swap(i, j int) { f[i], f[j] = f[j], f[i] }
 
-func (f funcs_sort_name_asc) Less(i, j int) bool {
-	s := f.funcs_sort_base
+type funcsSortNameAsc struct{ funcsSortBase }
+type funcsSortNameDesc struct{ funcsSortBase }
+type funcsSortFileAsc struct{ funcsSortBase }
+type funcsSortFileDesc struct{ funcsSortBase }
+type funcsSortCoverageAsc struct{ funcsSortBase }
+type funcsSortCoverageDesc struct{ funcsSortBase }
+
+func (f funcsSortNameAsc) Less(i, j int) bool {
+	s := f.funcsSortBase
 	return s[i].name < s[j].name
 }
 
-func (f funcs_sort_name_desc) Less(i, j int) bool {
-	s := f.funcs_sort_base
+func (f funcsSortNameDesc) Less(i, j int) bool {
+	s := f.funcsSortBase
 	return s[i].name >= s[j].name
 }
 
-func (f funcs_sort_file_asc) Less(i, j int) bool {
-	s := f.funcs_sort_base
+func (f funcsSortFileAsc) Less(i, j int) bool {
+	s := f.funcsSortBase
 	if s[i].file == s[j].file {
 		return s[i].name < s[j].name
 	}
 	return s[i].file < s[j].file
 }
 
-func (f funcs_sort_file_desc) Less(i, j int) bool {
-	s := f.funcs_sort_base
+func (f funcsSortFileDesc) Less(i, j int) bool {
+	s := f.funcsSortBase
 	if s[i].file == s[j].file {
 		return s[i].name < s[j].name
 	}
 	return s[i].file > s[j].file
 }
 
-func (f funcs_sort_coverage_desc) Less(i, j int) bool {
-	s := f.funcs_sort_base
-	if s[i].s_percentage == s[j].s_percentage {
+func (f funcsSortCoverageDesc) Less(i, j int) bool {
+	s := f.funcsSortBase
+	if s[i].sPercentage == s[j].sPercentage {
 		return s[i].name < s[j].name
 	}
-	return s[i].s_percentage > s[j].s_percentage
+	return s[i].sPercentage > s[j].sPercentage
 }
 
-func (f funcs_sort_coverage_asc) Less(i, j int) bool {
-	s := f.funcs_sort_base
-	if s[i].s_percentage == s[j].s_percentage {
+func (f funcsSortCoverageAsc) Less(i, j int) bool {
+	s := f.funcsSortBase
+	if s[i].sPercentage == s[j].sPercentage {
 		return s[i].name < s[j].name
 	}
-	return s[i].s_percentage < s[j].s_percentage
+	return s[i].sPercentage < s[j].sPercentage
 }
 
-const main_code = `
+const mainCode = `
 	wm deiconify .
 	wm title . "GoCov GUI"
 
@@ -546,24 +549,24 @@ const main_code = `
 	bind .f2.funcs <<TreeviewSelect>> go::selection_callback
 `
 
-func (g *go_part) find_gocov() {
+func (g *goPart) findGocov() {
 	path, err := exec.LookPath("gocov")
 	if err == nil {
-		g.gocov_path = path
+		g.gocovPath = path
 		return
 	}
 
 	path = filepath.Join(runtime.GOROOT(), "bin", "gocov")
-	if file_exists(path) {
-		g.gocov_path = path
+	if fileExists(path) {
+		g.gocovPath = path
 		return
 	}
 
 	goroot := os.Getenv("GOROOT")
 	if goroot != "" {
 		path = filepath.Join(goroot, "bin", "gocov")
-		if file_exists(path) {
-			g.gocov_path = path
+		if fileExists(path) {
+			g.gocovPath = path
 			return
 		}
 	}
@@ -571,8 +574,8 @@ func (g *go_part) find_gocov() {
 	gobin := os.Getenv("GOBIN")
 	if gobin != "" {
 		path = filepath.Join(gobin, "gocov")
-		if file_exists(path) {
-			g.gocov_path = path
+		if fileExists(path) {
+			g.gocovPath = path
 			return
 		}
 	}
@@ -580,19 +583,19 @@ func (g *go_part) find_gocov() {
 	gopaths := filepath.SplitList(os.Getenv("GOPATH"))
 	for _, path := range gopaths {
 		path = filepath.Join(path, "bin", "gocov")
-		if file_exists(path) {
-			g.gocov_path = path
+		if fileExists(path) {
+			g.gocovPath = path
 			return
 		}
 	}
 }
 
 func main() {
-	g := go_part{
-		sort_by: "coverage",
-		sort_order: "desc",
+	g := goPart{
+		sortBy:    "coverage",
+		sortOrder: "desc",
 	}
-	g.find_gocov()
+	g.findGocov()
 	g.Interpreter = gothic.NewInterpreter("wm withdraw .")
 	g.RegisterCommands("go", &g)
 	g.ErrorFilter(func(err error) error {
@@ -602,10 +605,10 @@ func main() {
 		return err
 	})
 
-	if g.gocov_path == "" {
+	if g.gocovPath == "" {
 		// oops, still haven't found the gocov tool, let's show
 		// a nice gui with various choices
-		g.not_found()
+		g.notFound()
 	} else {
 		g.main()
 	}

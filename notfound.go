@@ -4,17 +4,17 @@
 package main
 
 import (
-	"time"
-	"os/exec"
 	"bytes"
+	"os/exec"
+	"time"
 )
 
-func (g *go_part) animation_ticker() {
+func (g *goPart) animationTicker() {
 	for {
 		time.Sleep(100 * time.Millisecond)
 		select {
-		case <-g.animation_stop:
-			g.animation_stop = nil
+		case <-g.animationStop:
+			g.animationStop = nil
 			return
 		default:
 		}
@@ -27,59 +27,59 @@ func (g *go_part) animation_ticker() {
 				$image config -format "GIF -index 0"
 			}
 			%{0} config -image $image
-		`, g.animation_widget)
+		`, g.animationWidget)
 	}
 }
 
-func (g *go_part) TCL_start_animation_goroutine(w string) {
-	g.animation_stop = make(chan bool, 1)
-	g.animation_widget = w
-	go g.animation_ticker()
+func (g *goPart) TCL_start_animation_goroutine(w string) {
+	g.animationStop = make(chan bool, 1)
+	g.animationWidget = w
+	go g.animationTicker()
 }
 
-func (g *go_part) TCL_stop_animation_goroutine() {
+func (g *goPart) TCL_stop_animation_goroutine() {
 	select {
-	case g.animation_stop <- true:
+	case g.animationStop <- true:
 	default:
 	}
 }
 
 // stops animations and brings the "Go get" button back to its initial state
-func (g *go_part) go_get_gocov_done() {
+func (g *goPart) goGetGocovDone() {
 	g.TCL_stop_animation_goroutine()
 	g.Eval(`
 		%{0} config -text "Get gocov" -image {} -state normal
-	`, g.animation_widget)
+	`, g.animationWidget)
 }
 
 // Fires a goroutine which will invoke "go get -u github.com/axw/gocov/gocov"
 // and then perform another try to find the gocov binary. If it succeeds, the
 // goroutine will invoke g.main(), otherwise it shows a fatal error message
 // and does "exit".
-func (g *go_part) TCL_go_get_gocov() {
-	go g.go_get_gocov()
+func (g *goPart) TCL_go_get_gocov() {
+	go g.goGetGocov()
 }
 
-func (g *go_part) go_get_gocov() {
+func (g *goPart) goGetGocov() {
 	var errbuf bytes.Buffer
 	cmd := exec.Command("go", "get", "-u", "github.com/axw/gocov/gocov")
 	cmd.Stderr = &errbuf
 	err := cmd.Run()
 	if err != nil {
-		g.go_get_gocov_done()
+		g.goGetGocovDone()
 		if errbuf.Len() > 0 {
-			g.fatal_error(&errbuf)
+			g.fatalError(&errbuf)
 		} else {
-			g.fatal_error(err)
+			g.fatalError(err)
 		}
 	}
 
 	// try to find the gocov tool again
-	g.find_gocov()
-	if g.gocov_path == "" {
+	g.findGocov()
+	if g.gocovPath == "" {
 		// no luck :(
-		g.go_get_gocov_done()
-		g.fatal_error(`Unable to find the gocov binary after running "go get"`)
+		g.goGetGocovDone()
+		g.fatalError(`Unable to find the gocov binary after running "go get"`)
 	}
 
 	// all good, let's proceed
@@ -87,12 +87,12 @@ func (g *go_part) go_get_gocov() {
 	g.main()
 }
 
-const not_found_msg = `GoCovGUI failed to find the gocov tool itself, it ` +
+const notFoundMsg = `GoCovGUI failed to find the gocov tool itself, it ` +
 	`checks the following paths: $PATH, $GOROOT/bin, $GOBIN and $GOPATH/bin. ` +
 	`However, gocovgui can "go get" the tool for, just click the ` +
 	`"Get gocov" button.`
 
-const not_found_code = `
+const notFoundCode = `
 	set progressimg [image create photo -format GIF -data {
 		R0lGODlhEAAQAPIAAP///wAAAMLCwkJCQgAAAGJiYoKCgpKSkiH/C05FVFNDQVBFMi4wAwEAAAAh
 		/hpDcmVhdGVkIHdpdGggYWpheGxvYWQuaW5mbwAh+QQJCgAAACwAAAAAEAAQAAADMwi63P4wyklr
@@ -153,7 +153,7 @@ const not_found_code = `
 	}
 `
 
-func (g *go_part) not_found() {
-	g.Set("errmsg", not_found_msg)
-	g.Eval(not_found_code)
+func (g *goPart) notFound() {
+	g.Set("errmsg", notFoundMsg)
+	g.Eval(notFoundCode)
 }
